@@ -5,10 +5,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from urllib.request import urlopen
+import optuna  # Import Optuna for hyperparameter optimization
 
 # Download UCI SMS Spam Collection dataset
 print("Downloading SMS Spam Collection dataset...")
@@ -119,21 +120,40 @@ X_tfidf = vectorizer.fit_transform(X)
 X_train, X_test, y_train, y_test = train_test_split(X_tfidf, y, test_size=0.2, random_state=42, stratify=y)
 print(f"Training set size: {X_train.shape[0]}, Test set size: {X_test.shape[0]}")
 
-# Model creation and hyperparameter optimization
-print("\nTraining model with hyperparameter tuning...")
-param_grid = {
-    'alpha': [0.01, 0.1, 0.5, 1.0, 5.0]
-}
-model = GridSearchCV(MultinomialNB(), param_grid, cv=5, scoring='accuracy', n_jobs=-1)
-model.fit(X_train, y_train)
+# Define the objective function for Optuna
+def objective(trial):
+    # Define hyperparameters to optimize
+    alpha = trial.suggest_float('alpha', 0.001, 10.0, log=True)
+    
+    # Create and train the model
+    nb_model = MultinomialNB(alpha=alpha)
+    
+    # Use cross-validation for more robust evaluation
+    scores = cross_val_score(nb_model, X_train, y_train, cv=5, scoring='accuracy', n_jobs=-1)
+    
+    # Return the mean accuracy
+    return scores.mean()
+
+# Create and run the Optuna study
+print("\nStarting hyperparameter optimization with Optuna...")
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=20)  # Adjust n_trials as needed
+
+# Print optimization results
+print("\nOptimization Results:")
+print(f"Best alpha parameter: {study.best_params['alpha']}")
+print(f"Best accuracy: {study.best_value:.4f}")
+
+# Train final model with best parameters
+final_model = MultinomialNB(alpha=study.best_params['alpha'])
+final_model.fit(X_train, y_train)
 
 # Make predictions
-y_pred = model.predict(X_test)
+y_pred = final_model.predict(X_test)
 
 # Evaluate model
 print("\nModel evaluation:")
-print(f"Best alpha parameter: {model.best_params_['alpha']}")
-print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
+print(f"Test accuracy: {accuracy_score(y_test, y_pred):.4f}")
 print("\nClassification Report:")
 print(classification_report(y_test, y_pred))
 
@@ -147,6 +167,22 @@ plt.title('Confusion Matrix')
 plt.tight_layout()
 plt.savefig('confusion_matrix.png')
 plt.show()
+
+# Visualization of hyperparameter importance
+plt.figure(figsize=(10, 6))
+optuna.visualization.matplotlib.plot_param_importances(study)
+plt.title('Hyperparameter Importance')
+plt.tight_layout()
+plt.savefig('param_importances.png')
+plt.close()
+
+# Visualization of optimization history
+plt.figure(figsize=(10, 6))
+optuna.visualization.matplotlib.plot_optimization_history(study)
+plt.title('Optimization History')
+plt.tight_layout()
+plt.savefig('optimization_history.png')
+plt.close()
 
 # Example predictions
 def predict_message(message, vectorizer, model):
@@ -166,7 +202,7 @@ example_messages = [
 
 print("\nExample predictions:")
 for message in example_messages:
-    prediction, confidence = predict_message(message, vectorizer, model.best_estimator_)
+    prediction, confidence = predict_message(message, vectorizer, final_model)
     print(f"Message: {message}")
     print(f"Prediction: {prediction} (Confidence: {confidence:.2f})")
     print("-" * 50)
